@@ -2,11 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class CrowdManager : MonoBehaviour {
-
-    List<BouncerMovement> bouncers;
-    List<Killable> targets;
-
+public class Door : MonoBehaviour {
 
 	// Use this for initialization
 	void Start () {

@@ -4,12 +4,13 @@ using UnityEngine;
 
 public class BouncerMovement : MonoBehaviour {
 
-    public CrowdManager cm;
+    public NearbyAgentsDetector detector;
 
     public Transform target;
     public float killDistance;
-    private float currentDistanceToTarget;
-
+    public float maxAvoidForce;
+    public float avoidForceMultiplier;
+    private float currentDistanceToTarget = 0;
 
     public float scaleMax;
     public float scaleFluidity;
@@ -17,23 +18,25 @@ public class BouncerMovement : MonoBehaviour {
     private float baseScale;
     private float currentScale = 0;
 
-    public Rigidbody body;
-
-    private float jumpTimer = 0;
+    public float jumpTimer = 0;
     public float jumpCooldown;
     public float turnSpeed;
+    public float predictionModifier;
 
+    Vector3 currentJumpTarget;
     public float jumpChargeTime;
     public float jumpForwardForce;
     public float jumpUpForce;
+    private bool charging = false;
 
     private float distanceToGround;
     private bool grounded;
     public float groundTestLength;
 
-    public BouncerMeshHandle meshHandle;
-    public SpringHandle springHandle;
-    public SpringAnchor springAnchor;
+    Rigidbody body;
+    BouncerMeshHandle meshHandle;
+    SpringHandle springHandle;
+    SpringAnchor springAnchor;
 
 	// Use this for initialization
 	void Start () {
@@ -48,31 +51,32 @@ public class BouncerMovement : MonoBehaviour {
 	// Update is called once per frame
 	void Update () {
 
-        // This is used in several functions in the update
-        currentDistanceToTarget = (Vector3.Distance(transform.position, target.position));
 
-        if (jumpTimer > jumpCooldown)
+        if (Physics.Raycast(transform.position, -Vector3.up, groundTestLength, 1 << LayerMask.NameToLayer("FloorLayer")))
         {
-            StartCoroutine("JumpCoroutine");
-            jumpTimer = 0;
+            if (!charging)
+            {
+                jumpTimer += Time.deltaTime;
+                if (jumpTimer > jumpCooldown)
+                {
+                    target = FindNearestTargetTransform();
+                    if (target)
+                    {
+                        currentJumpTarget = target.position;
+                        StartCoroutine("JumpCoroutine");
+                        jumpTimer = 0;
+                    }
+                }
+            }
         }
-        else if (Physics.Raycast(transform.position, -Vector3.up, groundTestLength))
-        {
-            jumpTimer += Time.deltaTime;
-        }
-        else
-        {
-        }
-
 
         UpdateScale();
-
-        CheckForKills();
-
+        CheckForKillsAndCollisions();
 	}
 
     IEnumerator JumpCoroutine()
     {
+        charging = true;
         float charge = 0;
         while(charge < jumpChargeTime)
         {
@@ -82,31 +86,33 @@ public class BouncerMovement : MonoBehaviour {
 
             yield return null;
         }
+        charging = false;
         Jump();
     }
 
     void Jump()
     {
-        // Jump range is about 15
+        // Jump range is about 25 with 500 horizontal, 600 vertical jump force
         float forwardEffort = Mathf.Min(1, currentDistanceToTarget / 25);
         body.AddForce(transform.forward * jumpForwardForce * forwardEffort + transform.up * jumpUpForce);
-        print("Jump!");
+        //print("Jump!");
     }
 
     void Turn()
     {
-        if (currentDistanceToTarget < 2)
+        Rigidbody targetBody = target.GetComponent<Rigidbody>();
+        if (targetBody)
         {
-            return;
+            currentJumpTarget = currentJumpTarget * (1 - predictionModifier) + (target.position + targetBody.velocity * 1.5f) * predictionModifier;
         }
-        Vector3 targetDirection = target.position - transform.position;
+        Vector3 targetDirection = currentJumpTarget - transform.position;
+        Debug.DrawLine(target.position + Vector3.up, currentJumpTarget + Vector3.up, Color.green);
+
+        currentDistanceToTarget = (Vector3.Distance(transform.position, currentJumpTarget));
+
         float angle = Vector3.Angle(transform.forward, targetDirection);
-        if (angle > turnSpeed)
-        {
-            angle = turnSpeed;
-        }
         angle *= Mathf.Sign(Vector3.Dot(transform.right, targetDirection));
-        transform.Rotate(Vector3.up, angle * Time.deltaTime);
+        transform.Rotate(Vector3.up, angle * Time.deltaTime * turnSpeed);
     }
 
     void UpdateScale()
@@ -123,26 +129,76 @@ public class BouncerMovement : MonoBehaviour {
 
     }
 
-    void CheckForKills()
+    void CheckForKillsAndCollisions()
     {
-
-        Vector3 direction = target.position + Vector3.up * 3 - transform.position;
-        Debug.DrawRay(transform.position, direction, Color.green);
-        Debug.DrawRay(transform.position, direction.normalized * killDistance, Color.red);
-        print("distance:  " + direction.magnitude);
-
-        // Distance to target's head or thereabuots
-        if (Vector3.Distance(transform.position, target.position + Vector3.up * 3) < killDistance)
+        Vector3 avoidVector = Vector3.zero;
+        foreach(GameObject agent in detector.nearbyAgents)
         {
-            Killable killable = target.GetComponent<Killable>();
-            if (killable != null)
+            Killable killable = agent.GetComponent<Killable>();
+            if (killable)
             {
-                killable.Kill();
+                // Draw rays to debug
+                Vector3 raystart = transform.position + Vector3.up * 5;
+                Vector3 direction = agent.transform.position + Vector3.up * 2 - raystart;
+                Debug.DrawRay(raystart, direction, Color.green);
+                Debug.DrawRay(raystart, direction.normalized * killDistance, Color.blue);
+                //print("distance:  " + direction.magnitude);
+
+                // Distance to target's head or thereabuots
+                if (Vector3.Distance(transform.position + Vector3.up * 2, agent.transform.position) < killDistance)
+                {
+                    killable.Kill();
+                }
             }
             else
             {
-                print("cuodln't find killable component");
+                Vector3 raystart = transform.position + Vector3.up * 5;
+                Vector3 direction = agent.transform.position + Vector3.up * 5 - raystart;
+                Debug.DrawRay(raystart, direction, Color.green);
+                Debug.DrawRay(raystart, direction.normalized * killDistance, Color.magenta);
+
+                if (Vector3.Distance(transform.position + Vector3.up * 5, agent.transform.position) < killDistance)
+                {
+                    avoidVector += direction.normalized * avoidForceMultiplier / direction.magnitude;
+                }
             }
+
         }
+
+        // apply aviod force
+        if (avoidVector.magnitude > maxAvoidForce)
+        {
+            avoidVector = avoidVector.normalized * maxAvoidForce;
+        }
+        body.AddForce(avoidVector);
+    }
+
+    Transform FindNearestTargetTransform()
+    {
+        float nearest = Mathf.Infinity;
+        Transform nearestTarget = null;
+        foreach (GameObject agent in detector.nearbyAgents)
+        {
+            // Make sure it's not dead
+            Killable killable = agent.GetComponent<Killable>();
+            if (killable)
+            {
+                if (killable.dead)
+                {
+                    //detector.nearbyAgents.Remove(agent);
+                    continue;
+                }
+
+                float distance = Vector3.Distance(transform.position, agent.transform.position);
+                if (distance < nearest)
+                {
+                    nearestTarget = agent.transform;
+                    nearest = distance;
+                }
+            }
+
+
+        }
+        return nearestTarget;
     }
 }

@@ -6,6 +6,7 @@ public class CharacterMovement : MonoBehaviour {
 
     public float RotationAssist;
 
+    public bool disable = false;
 
     private string verticalAxis = "Vertical";
     private string horizontalAxis = "Horizontal";
@@ -20,6 +21,11 @@ public class CharacterMovement : MonoBehaviour {
 	// Update is called once per frame
 	void Update () {
 
+        if (disable)
+        {
+            anim.SetFloat("Forward", 0);
+            anim.SetFloat("Right", 0);
+        }
         Vector2 movementInput = new Vector2(Input.GetAxis(horizontalAxis), Input.GetAxis(verticalAxis));
 
 
